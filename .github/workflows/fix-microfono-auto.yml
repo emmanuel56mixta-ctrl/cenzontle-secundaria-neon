@@ -1,4 +1,4 @@
-name: Reparar micrófono automático
+name: Reparar microfono automatico
 
 on:
   push:
@@ -18,307 +18,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Aplicar reparación mínima y protegida
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import sys
+      - name: Aplicar reparacion minima y protegida
+        run: python3 .github/scripts/fix_microfono_auto.py
 
-          path = Path('index.html')
-          html = path.read_text(encoding='utf-8')
-          original = html
-          marker = 'CENZONTLE_MIC_AUTO_HOTFIX_20260831'
-
-          checks = {
-              'Mic.iniciar': 'Mic.iniciar' in html,
-              'Mic.vivo': 'Mic.vivo' in html,
-              'Mic.liberar': 'Mic.liberar' in html,
-              'MicUI': 'MicUI' in html,
-              'AyudaMic': 'AyudaMic' in html,
-              'mic-global': 'id="mic-global"' in html,
-              'MicAuto existente': ('const MicAuto' in html or 'let MicAuto' in html or 'var MicAuto' in html),
-              'MicAuto.init': 'MicAuto.init' in html,
-              'MicAuto.alEntrar': 'MicAuto.alEntrar' in html,
-          }
-          print('Diagnóstico previo:', checks)
-
-          required = ['Mic.iniciar', 'Mic.vivo', 'Mic.liberar', 'MicUI', 'AyudaMic', 'id="mic-global"']
-          missing = [x for x in required if x not in html]
-          if missing:
-              print('ABORTADO: faltan dependencias del subsistema de micrófono:', ', '.join(missing))
-              sys.exit(41)
-
-          if marker in html:
-              print('La reparación ya está presente; no se modifica index.html.')
-              sys.exit(0)
-
-          has_auto = checks['MicAuto existente']
-
-          # Este hotfix no reescribe ninguna actividad, estilo, audio, imagen ni ruta.
-          # Sólo observa el cambio de .screen.active y restablece el comportamiento
-          # automático que tenían las versiones v6.4-v6.6.1.
-          if has_auto:
-              js = r'''
-<script id="cenzontle-mic-auto-hotfix">
-/* CENZONTLE_MIC_AUTO_HOTFIX_20260831
-   Reparación de regresión v6.9.1: conserva el controlador MicAuto existente y garantiza
-   que al cambiar de pantalla se invoque alEntrar(). No altera actividades ni UI. */
-(() => {
-  const obtenerControlador = () => {
-    try { return (typeof MicAuto !== 'undefined' && MicAuto) ? MicAuto : null; }
-    catch (_) { return null; }
-  };
-  let ultimoId = null;
-  let programado = false;
-  const sincronizar = () => {
-    if (programado) return;
-    programado = true;
-    queueMicrotask(() => {
-      programado = false;
-      const ctl = obtenerControlador();
-      const activa = document.querySelector('.screen.active');
-      const id = activa ? activa.id : '';
-      if (!ctl || !id || typeof ctl.alEntrar !== 'function') return;
-      if (id === ultimoId) return;
-      ultimoId = id;
-      Promise.resolve(ctl.alEntrar(id)).catch(() => {});
-      try { if (typeof ctl.pintar === 'function') ctl.pintar(); } catch (_) {}
-    });
-  };
-  const arrancar = () => {
-    const ctl = obtenerControlador();
-    if (!ctl) return;
-    /* Si la integración perdió también la llamada de arranque, la recuperamos una sola vez. */
-    try {
-      if (!window.__cenzontleMicAutoInit && typeof ctl.init === 'function') {
-        window.__cenzontleMicAutoInit = true;
-        Promise.resolve(ctl.init()).catch(() => {});
-      }
-    } catch (_) {}
-    sincronizar();
-    const observer = new MutationObserver(muts => {
-      for (const m of muts) {
-        if (m.type === 'attributes' && m.attributeName === 'class' && m.target.classList && m.target.classList.contains('screen')) {
-          sincronizar();
-          break;
-        }
-      }
-    });
-    document.querySelectorAll('.screen').forEach(el => observer.observe(el, {attributes:true, attributeFilter:['class']}));
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) sincronizar(); });
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar, {once:true});
-  else arrancar();
-})();
-</script>
-'''
-          else:
-              js = r'''
-<script id="cenzontle-mic-auto-hotfix">
-/* CENZONTLE_MIC_AUTO_HOTFIX_20260831
-   Reparación de regresión v6.9.1. Restaura únicamente el controlador de encendido
-   automático usando el subsistema Mic/MicUI que ya existe en la aplicación. */
-(() => {
-  const PANTALLAS_VOZ_HOTFIX = new Set([
-    'prim-eco','prim-nota','prim-diccion',
-    'sec-afinador','sec-solfeo','sec-grabar','sec-dictado',
-    'doc-sesion','doc-conductor','coral-actividad','coral-rutina','dir-vocaliza'
-  ]);
-  const CLAVE_OK = 'cenzontle:microfono-autorizado';
-  const seguro = fn => { try { return fn(); } catch (_) { return undefined; } };
-  const refrescarUI = () => seguro(() => { if (typeof MicUI !== 'undefined' && MicUI.refrescar) MicUI.refrescar(); });
-  const decir = txt => seguro(() => { if (typeof toast === 'function') toast(txt); });
-
-  const ctl = {
-    activado:true,
-    pedido:false,
-    _ocio:null,
-    ESPERA:25000,
-    async concedido(){
-      if (seguro(() => Mic.vivo())) return true;
-      try {
-        if (navigator.permissions && navigator.permissions.query) {
-          const p = await navigator.permissions.query({name:'microphone'});
-          if (p.state === 'granted') return true;
-          if (p.state === 'denied') return false;
-        }
-      } catch (_) {}
-      return seguro(() => localStorage.getItem(CLAVE_OK) === '1') === true;
-    },
-    async alEntrar(id){
-      clearTimeout(this._ocio);
-      if (!this.activado) return;
-      if (!PANTALLAS_VOZ_HOTFIX.has(id)) { this.soltarSiOcioso(); return; }
-      if (seguro(() => Mic.vivo())) { this.pintar(); return; }
-      const entornoOk = seguro(() => (typeof Entorno === 'undefined' || !Entorno.revisar) ? true : Entorno.revisar().ok);
-      if (entornoOk === false) return;
-      if (!(await this.concedido())) return;
-      const ok = await Mic.iniciar();
-      if (ok) seguro(() => localStorage.setItem(CLAVE_OK,'1'));
-      refrescarUI();
-      this.pintar();
-    },
-    async autorizar(){
-      this.activado = true;
-      this.pedido = true;
-      const ok = await Mic.iniciar();
-      if (ok) {
-        seguro(() => localStorage.setItem(CLAVE_OK,'1'));
-        document.querySelectorAll('.aviso-mic').forEach(a => a.classList.remove('ver'));
-        decir('Micrófono autorizado. A partir de ahora se enciende solo en las actividades de voz.');
-      } else {
-        seguro(() => { if (typeof AyudaMic !== 'undefined' && AyudaMic.abrir) AyudaMic.abrir(); });
-      }
-      refrescarUI(); this.pintar();
-      return !!ok;
-    },
-    soltarSiOcioso(){
-      clearTimeout(this._ocio);
-      this._ocio = setTimeout(() => {
-        seguro(() => Mic.liberar());
-        this.pintar();
-        refrescarUI();
-      }, this.ESPERA);
-    },
-    async tocar(){
-      if (this.activado && !(await this.concedido())) { await this.autorizar(); return; }
-      this.alternar();
-    },
-    alternar(){
-      this.activado = !this.activado;
-      if (!this.activado) {
-        clearTimeout(this._ocio);
-        seguro(() => Mic.liberar());
-        decir('Micrófono apagado. Las actividades de voz ofrecerán su alternativa sin micrófono.');
-      } else {
-        decir('Micrófono automático activo.');
-        const a = document.querySelector('.screen.active');
-        this.alEntrar(a ? a.id : '');
-      }
-      this.pintar(); refrescarUI();
-    },
-    pintar(){
-      const b = document.getElementById('mic-global');
-      if (!b) return;
-      const vivo = !!seguro(() => Mic.vivo());
-      b.classList.toggle('on', vivo);
-      b.classList.toggle('off', !this.activado);
-      b.setAttribute('aria-pressed', String(this.activado));
-      b.setAttribute('aria-label', !this.activado
-        ? 'Micrófono apagado. Tocar para permitir que se encienda solo.'
-        : vivo ? 'Micrófono encendido. Tocar para apagarlo.'
-               : 'Micrófono automático activo, en espera. Tocar para apagarlo.');
-      const t = document.getElementById('mic-global-txt');
-      if (t) t.textContent = !this.activado ? 'Micrófono apagado' : vivo ? 'Micrófono activo' : 'Micrófono automático';
-    },
-    async init(){
-      this.pintar();
-      if (await this.concedido()) this.pedido = true;
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-          clearTimeout(this._ocio);
-          seguro(() => Mic.liberar());
-          this.pintar();
-        } else {
-          const a = document.querySelector('.screen.active');
-          if (a) this.alEntrar(a.id);
-        }
-      });
-      this.pintar();
-    }
-  };
-
-  /* Exposición controlada sólo para el botón global que v6.9.1 ya contiene. */
-  window.CenzontleMicAuto = ctl;
-  let ultimoId = null;
-  let programado = false;
-  const sincronizar = () => {
-    if (programado) return;
-    programado = true;
-    queueMicrotask(() => {
-      programado = false;
-      const activa = document.querySelector('.screen.active');
-      const id = activa ? activa.id : '';
-      if (!id || id === ultimoId) return;
-      ultimoId = id;
-      Promise.resolve(ctl.alEntrar(id)).catch(() => {});
-    });
-  };
-  const arrancar = () => {
-    ctl.init().catch(() => {});
-    sincronizar();
-    const boton = document.getElementById('mic-global');
-    if (boton && !boton.dataset.hotfixMic) {
-      boton.dataset.hotfixMic = '1';
-      boton.addEventListener('click', ev => {
-        /* Impide que el despachador antiguo intente resolver un MicAuto inexistente. */
-        ev.stopPropagation();
-        ctl.tocar().catch(() => {});
-      }, true);
-    }
-    const observer = new MutationObserver(muts => {
-      for (const m of muts) {
-        if (m.type === 'attributes' && m.attributeName === 'class' && m.target.classList && m.target.classList.contains('screen')) {
-          sincronizar();
-          break;
-        }
-      }
-    });
-    document.querySelectorAll('.screen').forEach(el => observer.observe(el, {attributes:true, attributeFilter:['class']}));
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar, {once:true});
-  else arrancar();
-})();
-</script>
-'''
-
-          if '</body>' not in html:
-              print('ABORTADO: no se encontró </body>.')
-              sys.exit(42)
-
-          html = html.replace('</body>', js + '\n</body>', 1)
-          if marker not in html or html.count(marker) != 1:
-              print('ABORTADO: el marcador de reparación no quedó exactamente una vez.')
-              sys.exit(43)
-
-          path.write_text(html, encoding='utf-8')
-          delta = abs(len(html.encode('utf-8')) - len(original.encode('utf-8')))
-          print('MicAuto preexistente:', has_auto)
-          print('Bytes añadidos:', delta)
-          if delta > 16000:
-              print('ABORTADO: el cambio excede el límite de seguridad de 16 KB.')
-              path.write_text(original, encoding='utf-8')
-              sys.exit(44)
-          PY
-
-      - name: Validar que no cambió nada más
+      - name: Validar que no cambio nada mas
         shell: bash
         run: |
           git diff --check
           changed="$(git diff --name-only)"
           echo "Archivos modificados: $changed"
           test "$changed" = "index.html"
-          echo "Resumen del cambio:"
-          git diff --stat -- index.html
           python3 - <<'PY'
           from pathlib import Path
-          s=Path('index.html').read_text(encoding='utf-8')
+          s = Path('index.html').read_text(encoding='utf-8')
           assert s.count('CENZONTLE_MIC_AUTO_HOTFIX_20260831') == 1
           assert 'id="mic-global"' in s
           assert 'Mic.iniciar' in s and 'Mic.vivo' in s and 'Mic.liberar' in s
-          print('Validación estructural OK.')
+          print('Validacion estructural OK')
           PY
+          git diff --stat -- index.html
 
-      - name: Publicar reparación
+      - name: Publicar reparacion
         shell: bash
         run: |
           if git diff --quiet; then
-            echo "No hay cambios que publicar."
+            echo "No hay cambios que publicar"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html
-          git commit -m "fix: restaurar activación automática del micrófono"
+          git commit -m "fix: restaurar activacion automatica del microfono"
           git push
