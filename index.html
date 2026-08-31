@@ -8734,7 +8734,67 @@ const Plan={
       '<tr><td class="rotulo">PDA sugerido</td><td colspan="5">'+escHtml(this.resumir(p.pda,310))+'</td></tr><tr><td class="rotulo">Propósito</td><td colspan="5">'+escHtml(this.resumir(p.ref.sesion.objetivo,285))+'</td></tr></table>'+
       '<h2 class="seccion">Secuencia didáctica</h2><table class="secuencia"><thead><tr><th>Momento</th><th>Actividad de Cenzontle</th><th>Orientación docente</th><th>Qué observar</th></tr></thead><tbody>'+filas+'</tbody></table>'+
       '<div class="abajo"><div class="bloque"><b>Repertorio y materiales</b>'+repertorio+'<br>'+escHtml(this.resumir(p.momentos.map(m=>m.recursos).join(' · '),150))+'</div><div class="bloque"><b>Adecuaciones previstas</b><div class="lineas"></div></div><div class="bloque"><b>Observaciones del grupo y siguiente decisión</b><div class="lineas"></div></div></div>'+
-      '<footer><span>El PDA es una referencia para el codiseño y debe contrastarse con el Programa Analítico de la escuela.</span><span>Generada el '+escHtml(fechaGen)+'</span></footer></body></html>';
+      '<footer><span>El PDA es una referencia para el codiseño y debe contrastarse con el Programa Analítico de la escuela.</span><span>Generada el '+escHtml(fechaGen)+'</span></footer>
+<script id="cenzontle-mic-auto-hotfix">
+/* CENZONTLE_MIC_AUTO_HOTFIX_20260831
+   Reparación de regresión v6.9.1: conserva MicAuto y garantiza que el cambio de
+   .screen.active reactive alEntrar(). No altera actividades, estilos, assets ni rutas. */
+(() => {
+  const obtenerControlador = () => {
+    try { return (typeof MicAuto !== 'undefined' && MicAuto) ? MicAuto : null; }
+    catch (_) { return null; }
+  };
+  let ultimoId = null;
+  let programado = false;
+  const sincronizar = () => {
+    if (programado) return;
+    programado = true;
+    queueMicrotask(() => {
+      programado = false;
+      const ctl = obtenerControlador();
+      const activa = document.querySelector('.screen.active');
+      const id = activa ? activa.id : '';
+      if (!ctl || !id || typeof ctl.alEntrar !== 'function' || id === ultimoId) return;
+      ultimoId = id;
+      Promise.resolve(ctl.alEntrar(id)).catch(() => {});
+      try { if (typeof ctl.pintar === 'function') ctl.pintar(); } catch (_) {}
+    });
+  };
+  const arrancar = () => {
+    const ctl = obtenerControlador();
+    if (!ctl) return;
+    /* MicAuto.init() es idempotente en lo esencial; lo invocamos sólo si la integración
+       actual no dejó constancia de haberlo arrancado en esta pestaña. */
+    try {
+      if (!window.__cenzontleMicAutoInit && typeof ctl.init === 'function') {
+        window.__cenzontleMicAutoInit = true;
+        Promise.resolve(ctl.init()).catch(() => {});
+      }
+    } catch (_) {}
+    sincronizar();
+    const observer = new MutationObserver(muts => {
+      for (const m of muts) {
+        if (m.type === 'attributes' && m.attributeName === 'class' &&
+            m.target.classList && m.target.classList.contains('screen')) {
+          sincronizar();
+          break;
+        }
+      }
+    });
+    document.querySelectorAll('.screen').forEach(el =>
+      observer.observe(el, {attributes:true, attributeFilter:['class']})
+    );
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { ultimoId = null; sincronizar(); }
+    });
+  };
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', arrancar, {once:true});
+  else arrancar();
+})();
+</script>
+
+</body></html>';
   },
   documentoHtml(){return this.documentoHtmlCompacto();},
   descargar(){
