@@ -18,7 +18,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Aplicar reparacion minima y protegida
+      - name: Deshacer insercion provisional anterior
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git revert --no-commit 91b1ffeca5e50b328b152c15dc7e2d03915acb64
+
+      - name: Aplicar reparacion en el cierre real del portal
         run: python3 .github/scripts/fix_microfono_auto.py
 
       - name: Validar que no cambio nada mas
@@ -31,22 +38,21 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s = Path('index.html').read_text(encoding='utf-8')
-          assert s.count('CENZONTLE_MIC_AUTO_HOTFIX_20260831') == 1
-          assert 'id="mic-global"' in s
-          assert 'Mic.iniciar' in s and 'Mic.vivo' in s and 'Mic.liberar' in s
-          print('Validacion estructural OK')
+          marker = 'CENZONTLE_MIC_AUTO_HOTFIX_20260831'
+          assert s.count(marker) == 1
+          p = s.index(marker)
+          last_body = s.rfind('</body>')
+          assert p < last_body
+          assert last_body - p < 6000
+          assert len(s) - last_body < 1000
+          assert 'const MicAuto' in s and 'MicAuto.alEntrar' in s
+          print('Validacion estructural y de ubicacion OK')
           PY
           git diff --stat -- index.html
 
-      - name: Publicar reparacion
+      - name: Publicar correccion definitiva
         shell: bash
         run: |
-          if git diff --quiet; then
-            echo "No hay cambios que publicar"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html
-          git commit -m "fix: restaurar activacion automatica del microfono"
+          git commit -m "fix: activar microfono automatico sin alterar otras funciones"
           git push
